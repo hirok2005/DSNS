@@ -1,4 +1,5 @@
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, overload
+from typing import Union, Optional
 import ssspx
 from dsns.helpers import SatID
 from dsns.multiconstellation import MultiConstellation
@@ -8,17 +9,31 @@ class GraphSolver(ABC):
     def __init__(self) -> None:
         super().__init__()
 
+    @overload
     def update(self, mobility: MultiConstellation) -> None:
-        n = len(mobility.satellites)
-        self.graph = ssspx.Graph(n)
-        for u, v in mobility.links:
-            self.graph.add_edge(u, v, mobility.get_delay(u, v))
+        pass
 
+    @overload
     def update(self, n: int, costs: dict[tuple[SatID, SatID], float]) -> None:
-        self.graph = ssspx.Graph(n)
-        for (u, v), c in costs.items():
-            self.graph.add_edge(u, v, c)
-            self.graph.add_edge(v, u, c)
+        pass
+
+    def update(self, data: Union[MultiConstellation, int], costs: Optional[dict[tuple[SatID, SatID], float]] = None) -> None:        
+        if isinstance(data, MultiConstellation):
+            mobility = data
+            n = len(mobility.satellites)
+            self.graph = ssspx.Graph(n)
+            for u, v in mobility.links:
+                self.graph.add_edge(u, v, mobility.get_delay(u, v))
+        elif isinstance(data, int):
+            if costs is None:
+                raise ValueError("If 'n' is provided, 'costs' must also be provided.")
+            n = data
+            self.graph = ssspx.Graph(n)
+            for (u, v), c in costs.items():
+                self.graph.add_edge(u, v, c)
+                self.graph.add_edge(v, u, c)
+        else:
+             raise TypeError(f"Unexpected type for data: {type(data)}")
 
     @abstractmethod
     def get_path_cost(self, source: SatID, destination: SatID) -> float:

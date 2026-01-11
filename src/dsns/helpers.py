@@ -457,3 +457,14 @@ def threaded(fn):
         thread.start()
         return thread
     return wrapper
+
+def get_doppler_shift(pos_tx: np.ndarray, vel_tx: np.ndarray, pos_rx: np.ndarray, vel_rx: np.ndarray, freq: float):
+    r_vector = pos_rx - pos_tx
+    range_dist = np.linalg.norm(r_vector)
+    if range_dist == 0: 
+        return 0.0
+    u_vector = r_vector / range_dist
+    v_rel = vel_rx - vel_tx
+    range_rate = np.dot(v_rel, u_vector)
+    shift = - (range_rate / SPEED_OF_LIGHT) * freq
+    return shift

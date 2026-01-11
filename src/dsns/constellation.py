@@ -98,6 +98,7 @@ class Satellite:
         self.orbital_center: OrbitalCenter = orbital_center
 
         self.position: np.ndarray = np.zeros(3)
+        self.velocity: np.ndarray = np.zeros(3)
 
 
 class Satellites:
@@ -370,8 +371,10 @@ class WalkerConstellation(Constellation):
                 phase_time_offset = (self.phase_offset / 360) * plane * self.period
                 time_offset = ((self.period / self.sats_per_plane) * sat) + phase_time_offset
                 pos = self.plane_ellipses[plane].xyzPos(time + time_offset)
+                vel = self.plane_ellipses[plane].xysVel(time + time_offset)
 
                 self.satellites[sat_index].position = pos
+                self.satellites[sat_index].velocity = vel
                 self.satellite_positions[sat_index] = pos
 
 
@@ -519,6 +522,7 @@ class TLEConstellation(Constellation):
         assert(positions.shape[0] == self.num_sats)
         for sat_index in range(self.num_sats):
             self.satellites[sat_index].position = positions[sat_index]
+            self.satellites[sat_index].velocity = velocities[sat_index]
             self.satellite_positions[sat_index] = positions[sat_index]
 
 
