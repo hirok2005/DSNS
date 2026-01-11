@@ -371,11 +371,12 @@ class WalkerConstellation(Constellation):
                 phase_time_offset = (self.phase_offset / 360) * plane * self.period
                 time_offset = ((self.period / self.sats_per_plane) * sat) + phase_time_offset
                 pos = self.plane_ellipses[plane].xyzPos(time + time_offset)
-                vel = self.plane_ellipses[plane].xysVel(time + time_offset)
+                vel = self.plane_ellipses[plane].xyzVel(time + time_offset)
 
                 self.satellites[sat_index].position = pos
                 self.satellites[sat_index].velocity = vel
                 self.satellite_positions[sat_index] = pos
+
 
 
 class FixedConstellation(Constellation):
@@ -518,6 +519,7 @@ class TLEConstellation(Constellation):
 
         # Reshape, convert km to m
         positions = positions[:,0,:] * 1000
+        velocities = velocities[:,0,:] * 1000
 
         assert(positions.shape[0] == self.num_sats)
         for sat_index in range(self.num_sats):
@@ -573,8 +575,15 @@ class GroundConstellation(Constellation):
 
         self.satellite_positions = helpers.lat_lon_alt_to_xyz(lat_lon_alt, self.host_radius)
 
+        velocities = np.zeros((self.num_sats, 3))
+        if self.rotation_period is not None:
+            omega = 2 * np.pi / self.rotation_period
+            velocities[:, 0] = -omega * self.satellite_positions[:, 1]
+            velocities[:, 1] =  omega * self.satellite_positions[:, 0]
+
         for i in range(len(self.satellites)):
             self.satellites[i].position = self.satellite_positions[i]
+            self.satellites[i].velocity = velocities[i]
 
 
 class WalkerISLHelper(ISLHelper):

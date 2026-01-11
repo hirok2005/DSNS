@@ -7,6 +7,10 @@ from typing import Optional
 # Type aliases
 SatID = int
 
+ISL_FREQ = 193 * (10 ** 12)
+""" ISL Frequency """
+
+
 GRAVITATIONAL_CONSTANT: float = 6.67430e-11
 """ Gravitational constant, in m^3 / (kg * s^2) """
 
@@ -458,10 +462,11 @@ def threaded(fn):
         return thread
     return wrapper
 
+# Do not use with multiconstellation if using TLE with other types
 def get_doppler_shift(pos_tx: np.ndarray, vel_tx: np.ndarray, pos_rx: np.ndarray, vel_rx: np.ndarray, freq: float):
     r_vector = pos_rx - pos_tx
     range_dist = np.linalg.norm(r_vector)
-    if range_dist == 0: 
+    if range_dist == 0:
         return 0.0
     u_vector = r_vector / range_dist
     v_rel = vel_rx - vel_tx

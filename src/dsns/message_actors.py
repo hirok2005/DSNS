@@ -16,7 +16,7 @@ from dsns.message import AttackMessageDroppedEvent, BaseMessage, BroadcastMessag
 
 from .multiconstellation import MultiConstellation
 from .events import Event, LinkUpEvent, LinkDownEvent
-from .helpers import SatID, get_doppler_shift
+from .helpers import ISL_FREQ, SatID, get_doppler_shift
 from .simulation import Actor, RoutingDataProvider
 from .solvers import GraphSolver, DijkstraSolver, BmsspSolver
 
@@ -947,13 +947,13 @@ class LookaheadRoutingDataProvider(RoutingDataProvider):
 
 
 def novel_cost(mobility: MultiConstellation) -> dict[tuple[SatID, SatID], float]:
-    freq = 193 * (10 ** 12)
     costs = dict()
+    MAX_DOPPLER = 10e9
     for u, v in mobility.links:
         pos_u, vel_u = mobility.satellites.by_id(u).position, mobility.satellites.by_id(u).velocity
         pos_v, vel_v = mobility.satellites.by_id(v).position, mobility.satellites.by_id(v).velocity
-        cost1 = mobility.get_delay(u, v) + get_doppler_shift(pos_u, vel_u, pos_v, vel_v, freq)
-        cost2 = mobility.get_delay(v, u) + get_doppler_shift(pos_v, vel_v, pos_u, vel_u, freq)
+        cost1 = mobility.get_delay(u, v) + abs(get_doppler_shift(pos_u, vel_u, pos_v, vel_v, ISL_FREQ)) / MAX_DOPPLER
+        cost2 = mobility.get_delay(v, u) + abs(get_doppler_shift(pos_v, vel_v, pos_u, vel_u, ISL_FREQ)) / MAX_DOPPLER
         costs[(u, v)] = cost1
         costs[(v, u)] = cost2
 
@@ -1021,3 +1021,7 @@ class GlobalRoutingActor(MessageRoutingActor):
     def __init__(self,  solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
         provider = GlobalRoutingDataProvider(solver=solver, update_interval=update_interval, advanced_cost=advanced_cost)
         super().__init__(provider, store_and_forward, model_bandwidth, attack_strategy, loss_config, reliable_transfer_config)
+
+class SourceRoutingDataProvider(RoutingDataProvider):
+    def __init__(self, get_next_hop_override: Optional[Callable[[BaseMessage, SatID, SatID], Optional[SatID]]] = None):
+        super().__init__(get_next_hop_override)193 
