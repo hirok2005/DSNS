@@ -120,6 +120,19 @@ class DirectMessage(BaseMessage):
 
     destination: SatID
 
+@hashable
+@dataclass(kw_only=True)
+class SourceRoutedMessage(BaseMessage):
+    """
+    Message to be sent between nodes. Used for source routing
+    """
+
+    destination: SatID
+    route: tuple[SatID] | None = None
+    """ Source computed path to destination """
+    index: int = -1
+    """ current index in the comptued route """
+
 @broadcast
 class BroadcastMessage(BaseMessage):
     """

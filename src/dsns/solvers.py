@@ -6,6 +6,7 @@ from dsns.multiconstellation import MultiConstellation
 
 
 class GraphSolver(ABC):
+    graph: ssspx.Graph
     def __init__(self) -> None:
         super().__init__()
 
@@ -42,6 +43,17 @@ class GraphSolver(ABC):
     @abstractmethod
     def get_path(self, source: SatID, destination: SatID) -> list[SatID]:
         pass
+
+    def remove_edges(self, edges: set[tuple[SatID, SatID]]) -> None:
+        edges_by_u = {}
+        for u, v in edges:
+            edges_by_u.setdefault(u, set()).add(v)
+            edges_by_u.setdefault(v, set()).add(u)
+
+        for u, targets in edges_by_u.items():
+            self.graph.adj[u] = [
+                (v, w) for v, w in self.graph.adj[u] if v not in targets
+            ]
 
 
 class BmsspSolver(GraphSolver):

@@ -12,6 +12,7 @@ try:
     from dsns.key_management import AttackStrategy
 except ModuleNotFoundError:
     AttackStrategy = None
+from dsns import message
 from dsns.message import AttackMessageDroppedEvent, BaseMessage, BroadcastMessage, DirectMessage, DropReason, HybridDirectMessage, LTPSegment, LTPSegmentCreatedEvent, LTPSegmentReceivedEvent, LinkLossProbabilityUpdateEvent, LossConfig, MessageBroadcastDeliveredEvent, MessageCreatedEvent, MessageDeliveredEvent, MessageDroppedEvent, MessageLostEvent, MessageQueuedEvent, MessageReceivedEvent, MessageRerouteEvent, MessageSentEvent, ReliableTransferConfig, UnreliableConfig
 
 from .multiconstellation import MultiConstellation
@@ -956,12 +957,14 @@ def novel_cost(mobility: MultiConstellation) -> dict[tuple[SatID, SatID], float]
         cost2 = mobility.get_delay(v, u) + abs(get_doppler_shift(pos_v, vel_v, pos_u, vel_u, ISL_FREQ)) / MAX_DOPPLER
         costs[(u, v)] = cost1
         costs[(v, u)] = cost2
+    return costs
 
 class GlobalRoutingDataProvider(RoutingDataProvider):
     solver: GraphSolver
     update_interval: float
     _last_update_time = -float("inf")
     _advanced_cost: bool
+    _failed_links: set[tuple[SatID, SatID]] = set()
 
     def __init__(self, get_next_hop_override: Optional[Callable[[BaseMessage, SatID, SatID], Optional[SatID]]] = None, solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False):
         super().__init__(get_next_hop_override=get_next_hop_override)
@@ -973,14 +976,16 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
         self.update(mobility, time)
         return []
 
-    def update(self, mobility: MultiConstellation, time: float):
-        if  time - self._last_update_time >= self.update_interval:
+    def update(self, mobility: MultiConstellation, time: float, force: bool=False):
+        if force or time - self._last_update_time >= self.update_interval:
             if self._advanced_cost:
                 costs = novel_cost(mobility)
                 self.solver.update(len(mobility.satellites), costs)
             else:
                 self.solver.update(mobility)
             self._last_update_time = time
+
+            self.solver.remove_edges(self._failed_links)
 
     def _get_next_hop(self, source: SatID, destination: SatID) -> Optional[SatID]:
         try:
@@ -1014,8 +1019,16 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
         return []
 
     def handle_event(self, mobility: MultiConstellation, event: Event) -> list[Event]:
+        if isinstance(event, LinkDownEvent):
+            self._failed_links.add((event.sat1, event.sat2))
+            self._failed_links.add((event.sat2, event.sat1))
+            self.update(mobility, event.time, force=True)
+        elif isinstance(event, LinkUpEvent):
+            if (event.sat1, event.sat2) in self._failed_links:
+                self._failed_links.discard((event.sat1, event.sat2))
+                self._failed_links.discard((event.sat2, event.sat1))
+                self.update(mobility, event.time, force=True)
         return []
-    
 
 class GlobalRoutingActor(MessageRoutingActor):
     def __init__(self,  solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
@@ -1023,5 +1036,91 @@ class GlobalRoutingActor(MessageRoutingActor):
         super().__init__(provider, store_and_forward, model_bandwidth, attack_strategy, loss_config, reliable_transfer_config)
 
 class SourceRoutingDataProvider(RoutingDataProvider):
-    def __init__(self, get_next_hop_override: Optional[Callable[[BaseMessage, SatID, SatID], Optional[SatID]]] = None):
-        super().__init__(get_next_hop_override)193 
+    solver: GraphSolver
+    update_interval: float
+    _last_update_time = -float("inf")
+
+    def __init__(self, get_next_hop_override: Optional[Callable[[BaseMessage, SatID, SatID], Optional[SatID]]] = None, solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 5):
+        super().__init__(get_next_hop_override=get_next_hop_override)
+        self.solver = solver() if isinstance(solver, type) else solver
+        self.update_interval = update_interval
+
+    def initialize(self, mobility: MultiConstellation, time: float) -> list[Event]:
+        self.update(mobility, time)
+        return []
+
+    def update(self, mobility: MultiConstellation, time: float):
+        if  time - self._last_update_time >= self.update_interval:
+            self.solver.update(mobility)
+            self._last_update_time = time
+
+    def _get_next_hop(self, source: SatID, destination: SatID) -> Optional[SatID]:
+        try:
+            path = self.solver.get_path(source, destination)
+            if path and len(path) > 1:
+                return path[1]
+            else:
+                return None
+        except Exception:
+            return None
+    
+    def get_next_hop(self, source: SatID, destination: SatID, message: BaseMessage = None) -> Optional[SatID]:
+        if self.get_next_hop_override:
+            next_hop = self.get_next_hop_override(message, source, destination)
+            if next_hop is not None:
+                return next_hop
+        
+        if message is None:
+            return self._get_next_hop(source, destination)
+        
+        route = getattr(message, "route", None)
+        index = getattr(message, "index", -1)
+
+        if route is None:
+            try:
+                route = tuple(self.solver.get_path(source, destination))
+            except Exception:
+                return None
+            if len(route) < 2:
+                return None
+            message.route = route
+            message.index = 0
+            index = 0
+
+        if index < len(route):
+            if index + 1 < len(route):
+                next_hop = route[index + 1]
+                message.index += 1
+                return next_hop
+            else:
+                return None
+        return None
+
+    def get_path_cost(self, source, destination):
+        try:
+            return self.solver.get_path_cost(source, destination)
+        except Exception:
+            return float("inf")
+        
+    def get_distance(self, source, destination):
+        cost = self.get_path_cost(source, destination)
+        return cost if cost != float("inf") else None
+    
+    def get_neighbors(self, source, max_distance = None):
+        if hasattr(self.solver, 'graph') and self.solver.graph:
+            g = self.solver.graph
+            if 0 <= source < g.n:
+                neighbors = []
+                for v, w in g.adj[source]:
+                    if max_distance is None or w <= max_distance:
+                        neighbors.append(v)
+                return neighbors
+        return []
+
+    def handle_event(self, mobility: MultiConstellation, event: Event) -> list[Event]:
+        return []
+
+class SourceRoutingActor(MessageRoutingActor):
+    def __init__(self,  solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
+        provider = SourceRoutingDataProvider(solver=solver, update_interval=update_interval)
+        super().__init__(provider, store_and_forward, model_bandwidth, attack_strategy, loss_config, reliable_transfer_config)
