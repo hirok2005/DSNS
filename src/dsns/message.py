@@ -119,6 +119,10 @@ class DirectMessage(BaseMessage):
     """
 
     destination: SatID
+    route: tuple[SatID] | None = None
+    """ Source computed path to destination """
+    index: int = -1
+    """ current index in the comptued route """
 
 @hashable
 @dataclass(kw_only=True)

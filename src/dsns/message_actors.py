@@ -1,6 +1,5 @@
-
 from collections import deque
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 
 from networkit import Graph
 from networkit.distance import Dijkstra
@@ -1031,8 +1030,9 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
         return []
 
 class GlobalRoutingActor(MessageRoutingActor):
-    def __init__(self,  solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
-        provider = GlobalRoutingDataProvider(solver=solver, update_interval=update_interval, advanced_cost=advanced_cost)
+    def __init__(self,  provider: Optional[RoutingDataProvider], solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
+        if not provider:
+            provider = GlobalRoutingDataProvider(solver=solver, update_interval=update_interval, advanced_cost=advanced_cost)
         super().__init__(provider, store_and_forward, model_bandwidth, attack_strategy, loss_config, reliable_transfer_config)
 
 class SourceRoutingDataProvider(RoutingDataProvider):
@@ -1121,6 +1121,7 @@ class SourceRoutingDataProvider(RoutingDataProvider):
         return []
 
 class SourceRoutingActor(MessageRoutingActor):
-    def __init__(self,  solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
-        provider = SourceRoutingDataProvider(solver=solver, update_interval=update_interval)
+    def __init__(self,  provider: Optional[RoutingDataProvider] = None, solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False, store_and_forward = False, model_bandwidth=False, attack_strategy = None, loss_config = None, reliable_transfer_config = UnreliableConfig()):
+        if not provider:
+            provider = SourceRoutingDataProvider(solver=solver, update_interval=update_interval)
         super().__init__(provider, store_and_forward, model_bandwidth, attack_strategy, loss_config, reliable_transfer_config)

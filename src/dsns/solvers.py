@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod, overload
+from abc import ABC, abstractmethod
 from typing import Union, Optional
 import ssspx
 from dsns.helpers import SatID
@@ -7,18 +7,21 @@ from dsns.multiconstellation import MultiConstellation
 
 class GraphSolver(ABC):
     graph: ssspx.Graph
+
     def __init__(self) -> None:
         super().__init__()
 
-    @overload
     def update(self, mobility: MultiConstellation) -> None:
         pass
 
-    @overload
     def update(self, n: int, costs: dict[tuple[SatID, SatID], float]) -> None:
         pass
 
-    def update(self, data: Union[MultiConstellation, int], costs: Optional[dict[tuple[SatID, SatID], float]] = None) -> None:        
+    def update(
+        self,
+        data: Union[MultiConstellation, int],
+        costs: Optional[dict[tuple[SatID, SatID], float]] = None,
+    ) -> None:
         if isinstance(data, MultiConstellation):
             mobility = data
             n = len(mobility.satellites)
@@ -34,7 +37,7 @@ class GraphSolver(ABC):
                 self.graph.add_edge(u, v, c)
                 self.graph.add_edge(v, u, c)
         else:
-             raise TypeError(f"Unexpected type for data: {type(data)}")
+            raise TypeError(f"Unexpected type for data: {type(data)}")
 
     @abstractmethod
     def get_path_cost(self, source: SatID, destination: SatID) -> float:
