@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Union, Optional
+from typing import Union, Optional, overload
 import ssspx
 from dsns.helpers import SatID
 from dsns.multiconstellation import MultiConstellation
@@ -7,6 +7,8 @@ from dsns.multiconstellation import MultiConstellation
 
 class GraphSolver(ABC):
     graph: ssspx.Graph
+    cache: dict[SatID, ssspx.SSSPResult] = {}
+    
 
     def __init__(self) -> None:
         super().__init__()
@@ -22,6 +24,7 @@ class GraphSolver(ABC):
         data: Union[MultiConstellation, int],
         costs: Optional[dict[tuple[SatID, SatID], float]] = None,
     ) -> None:
+        self.cache.clear()
         if isinstance(data, MultiConstellation):
             mobility = data
             n = len(mobility.satellites)
@@ -47,6 +50,11 @@ class GraphSolver(ABC):
     def get_path(self, source: SatID, destination: SatID) -> list[SatID]:
         pass
 
+    # FOR BENCHMARKING ONLY, BYPASSES CACHE
+    @abstractmethod
+    def benchmark_solve(self, source: SatID, destination: SatID) -> float:
+        pass
+
     def remove_edges(self, edges: set[tuple[SatID, SatID]]) -> None:
         edges_by_u = {}
         for u, v in edges:
@@ -66,14 +74,26 @@ class BmsspSolver(GraphSolver):
         super().__init__()
 
     def get_path_cost(self, source: SatID, destination: SatID) -> float:
+        res = self.cache.get(source, None) 
+        if not res:
+            solver = ssspx.SSSPSolver(self.graph, source, BmsspSolver.config)
+            res = solver.solve()
+            self.cache[source] = res
+        return res.distances[destination]
+
+    def get_path(self, source: SatID, destination: SatID) -> list[SatID]:
+        res = self.cache.get(source, None) 
+        if not res:
+            solver = ssspx.SSSPSolver(self.graph, source, BmsspSolver.config)
+            res = solver.solve()
+            self.cache[source] = res
+        return ssspx.reconstruct_path_basic(res.predecessors, source, destination)
+
+    def benchmark_solve(self, source: SatID, destination: SatID) -> float:
         solver = ssspx.SSSPSolver(self.graph, source, BmsspSolver.config)
         res = solver.solve()
         return res.distances[destination]
 
-    def get_path(self, source: SatID, destination: SatID) -> list[SatID]:
-        solver = ssspx.SSSPSolver(self.graph, source, BmsspSolver.config)
-        _ = solver.solve()
-        return solver.path(destination)
 
 
 class DijkstraSolver(GraphSolver):
@@ -81,9 +101,20 @@ class DijkstraSolver(GraphSolver):
         super().__init__()
 
     def get_path_cost(self, source: SatID, destination: SatID) -> float:
-        res = ssspx.dijkstra_reference(self.graph, [source])
+        res = self.cache.get(source, None) 
+        if not res:
+            res = ssspx.dijkstra_reference(self.graph, [source])
+            self.cache[source] = res
         return res.distances[destination]
 
     def get_path(self, source: SatID, destination: SatID) -> list[SatID]:
-        res = ssspx.dijkstra_reference(self.graph, [source])
+        res = self.cache.get(source, None) 
+        if not res:
+            res = ssspx.dijkstra_reference(self.graph, [source])
+            self.cache[source] = res
         return ssspx.reconstruct_path_basic(res.predecessors, source, destination)
+
+    def benchmark_solve(self, source: SatID, destination: SatID) -> float:
+        res = ssspx.dijkstra_reference(self.graph, [source])
+        return res.distances[destination]
+
