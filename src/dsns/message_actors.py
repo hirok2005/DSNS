@@ -966,6 +966,8 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
     _failed_links: set[tuple[SatID, SatID]] = set()
     _gs_ids: set[SatID] = set()
     _gs_neighbors: dict[SatID, list[tuple[SatID, float]]] = {}
+    mobility: Optional[MultiConstellation] = None
+
 
     def __init__(self, get_next_hop_override: Optional[Callable[[BaseMessage, SatID, SatID], Optional[SatID]]] = None, solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15, advanced_cost=False):
         super().__init__(get_next_hop_override=get_next_hop_override)
@@ -975,6 +977,7 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
 
     def initialize(self, mobility: MultiConstellation, time: float) -> list[Event]:
         self.update(mobility, time)
+        self.mobility = mobility
         return []
 
     def update(self, mobility: MultiConstellation, time: float, force: bool=False):
@@ -1004,6 +1007,30 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
 
             self.solver.remove_edges(self._failed_links | edges_to_remove)
 
+    def _get_best_neighbor(self, neighbors: list[tuple[SatID, float]], target: SatID) -> tuple[SatID, float]:
+        if not neighbors:
+             return None
+        
+        if not self.mobility:
+             return neighbors[0]
+
+        try:
+            target_pos = self.mobility.satellites.by_id(target).position
+            
+            best_neighbor = neighbors[0]
+            min_dist = float('inf')
+
+            for neighbor in neighbors:
+                sat_id = neighbor[0]
+                pos = self.mobility.satellites.by_id(sat_id).position
+                dist = np.linalg.norm(pos - target_pos)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_neighbor = neighbor
+            return best_neighbor
+        except Exception:
+            return neighbors[0]
+
     def _get_next_hop(self, source: SatID, destination: SatID) -> Optional[SatID]:
         if source == destination:
             return None
@@ -1013,14 +1040,15 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
             neighbors = self._gs_neighbors.get(source, [])
             if len(neighbors) == 0:
                 return None
-            return neighbors[0][0]
+            best = self._get_best_neighbor(neighbors, destination)
+            return best[0]
 
         destination_new = (destination, 0.0)
         if destination in self._gs_ids:
             neighbors = self._gs_neighbors.get(destination, [])
             if len(neighbors) == 0:
                 return None
-            destination_new = neighbors[0]
+            destination_new = self._get_best_neighbor(neighbors, source)
 
         if source == destination_new[0]:
             return destination
@@ -1043,14 +1071,14 @@ class GlobalRoutingDataProvider(RoutingDataProvider):
             neighbors = self._gs_neighbors.get(source, [])
             if len(neighbors) == 0:
                 return None
-            source_new = neighbors[0]
+            source_new = self._get_best_neighbor(neighbors, destination)
 
         destination_new = (destination, 0.0)
         if destination in self._gs_ids:
             neighbors = self._gs_neighbors.get(destination, [])
             if len(neighbors) == 0:
                 return None
-            destination_new = neighbors[0]
+            destination_new = self._get_best_neighbor(neighbors, source)
 
         try:
             return self.solver.get_path_cost(source_new[0], destination_new[0]) + source_new[1] + destination_new[1]
@@ -1097,6 +1125,7 @@ class SourceRoutingDataProvider(RoutingDataProvider):
     _last_update_time = -float("inf")
     _gs_ids: set[SatID] = set()
     _gs_neighbors: dict[SatID, list[tuple[SatID, float]]] = {}
+    mobility: Optional[MultiConstellation] = None
 
     def __init__(self, get_next_hop_override: Optional[Callable[[BaseMessage, SatID, SatID], Optional[SatID]]] = None, solver: Union[GraphSolver, type[GraphSolver]] = BmsspSolver, update_interval: float = 15):
         super().__init__(get_next_hop_override=get_next_hop_override)
@@ -1108,6 +1137,7 @@ class SourceRoutingDataProvider(RoutingDataProvider):
         return []
 
     def update(self, mobility: MultiConstellation, time: float):
+        self.mobility = mobility
         if  time - self._last_update_time >= self.update_interval:
             self.solver.update(mobility)
             self._last_update_time = time
@@ -1129,7 +1159,31 @@ class SourceRoutingDataProvider(RoutingDataProvider):
                             self._gs_neighbors[u].append((v, w))
                             edges_to_remove.add((u, v))
             
-            self.solver.remove_edges(edges_to_remove)
+            # self.solver.remove_edges(edges_to_remove)
+
+    def _get_best_neighbor(self, neighbors: list[tuple[SatID, float]], target: SatID) -> tuple[SatID, float]:
+        if not neighbors:
+             return None
+        
+        if not self.mobility:
+            return neighbors[0]
+
+        try:
+            target_pos = self.mobility.satellites.by_id(target).position
+            
+            best_neighbor = neighbors[0]
+            min_dist = float('inf')
+
+            for neighbor in neighbors:
+                sat_id = neighbor[0]
+                pos = self.mobility.satellites.by_id(sat_id).position
+                dist = np.linalg.norm(pos - target_pos)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_neighbor = neighbor
+            return best_neighbor
+        except Exception:
+            return neighbors[0]
 
     def _get_path(self, source: SatID, destination: SatID) -> list[SatID]:
         if source == destination:
@@ -1140,17 +1194,18 @@ class SourceRoutingDataProvider(RoutingDataProvider):
             neighbors = self._gs_neighbors.get(source, [])
             if len(neighbors) == 0:
                 return []
-            source_new = neighbors[0]
+            source_new = self._get_best_neighbor(neighbors, destination)
 
         destination_new = (destination, 0.0)
         if destination in self._gs_ids:
             neighbors = self._gs_neighbors.get(destination, [])
             if len(neighbors) == 0:
                 return []
-            destination_new = neighbors[0]
+            destination_new = self._get_best_neighbor(neighbors, source)
 
         try:
-            path = self.solver.get_path(source_new[0], destination_new[0])
+            # path = self.solver.get_path(source_new[0], destination_new[0])
+            return self.solver.get_path(source, destination)
             return [source] + path + [destination]
         except Exception:
             return []
@@ -1213,17 +1268,18 @@ class SourceRoutingDataProvider(RoutingDataProvider):
             neighbors = self._gs_neighbors.get(source, [])
             if len(neighbors) == 0:
                 return None
-            source_new = neighbors[0]
+            source_new = self._get_best_neighbor(neighbors, destination)
 
         destination_new = (destination, 0.0)
         if destination in self._gs_ids:
             neighbors = self._gs_neighbors.get(destination, [])
             if len(neighbors) == 0:
                 return None
-            destination_new = neighbors[0]
+            destination_new = self._get_best_neighbor(neighbors, source)
 
         try:
-            return self.solver.get_path_cost(source_new[0], destination_new[0]) + source_new[1] + destination_new[1]
+            # return self.solver.get_path_cost(source_new[0], destination_new[0]) + source_new[1] + destination_new[1]
+            return self.solver.get_path_cost(source, destination)
         except Exception:
             return float("inf")
         

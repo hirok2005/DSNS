@@ -56,6 +56,8 @@ def source_route_encode(path: list[SatID], mobility: MultiConstellation, planes:
             header.append(inter_plane_bit)
             header.append(plane+plane_2)
             header.append(plane_index+ind_2)
+    if intra_hops:
+        header.append(plane_index + str(intra_hops_count))
 
     return header
 

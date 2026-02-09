@@ -116,6 +116,7 @@ class Visualizer:
 
         return nodes_mesh
 
+
     def build_nodes_mesh_from_sats(self, node_mesh: trimesh.creation.Trimesh, satellites: Satellites) -> pyrender.Mesh:
         """
         Build a mesh for a set of nodes from a set of satellites.
@@ -130,9 +131,54 @@ class Visualizer:
         positions = np.array([ (s.position * self.space_scale) + (s.orbital_center.position * self.interplanetary_scale) for s in satellites ])
         poses = np.tile(np.eye(4), (len(positions), 1, 1))
         poses[:,:3,3] = positions
-        nodes_mesh = pyrender.Mesh.from_trimesh(node_mesh, poses=poses)
+        
+        # Create the main satellite nodes
+        mesh_sats = pyrender.Mesh.from_trimesh(node_mesh, poses=poses)
+        primitives = list(mesh_sats.primitives)
 
-        return nodes_mesh
+        # Create direction markers (little balls)
+        marker_positions = []
+        marker_offset = 0.1 # Distance in front of the satellite (renderer units)
+        
+        for i, sat in enumerate(satellites):
+            vel = sat.velocity
+            speed = np.linalg.norm(vel)
+            if speed > 1e-6:
+                direction = vel / speed
+                # Place marker in front of the satellite
+                marker_pos = positions[i] + (direction * marker_offset)
+                marker_positions.append(marker_pos)
+        
+        if marker_positions:
+            # Create a small sphere for the marker
+            marker_mesh = trimesh.creation.icosphere(radius=0.02, subdivisions=1)
+            # light yellow color for visibility
+            marker_mesh.visual.vertex_colors = [255, 255, 200, 255]
+            
+            marker_poses = np.tile(np.eye(4), (len(marker_positions), 1, 1))
+            marker_poses[:,:3,3] = np.array(marker_positions)
+            
+            mesh_markers = pyrender.Mesh.from_trimesh(marker_mesh, poses=marker_poses)
+            primitives.extend(mesh_markers.primitives)
+
+        return pyrender.Mesh(primitives=primitives)
+    # def build_nodes_mesh_from_sats(self, node_mesh: trimesh.creation.Trimesh, satellites: Satellites) -> pyrender.Mesh:
+    #     """
+    #     Build a mesh for a set of nodes from a set of satellites.
+    #
+    #     Parameters:
+    #         node_mesh: Mesh for a single node.
+    #         satellites: Satellites to build a mesh for.
+    #
+    #     Returns:
+    #         Mesh for the nodes.
+    #     """
+    #     positions = np.array([ (s.position * self.space_scale) + (s.orbital_center.position * self.interplanetary_scale) for s in satellites ])
+    #     poses = np.tile(np.eye(4), (len(positions), 1, 1))
+    #     poses[:,:3,3] = positions
+    #     nodes_mesh = pyrender.Mesh.from_trimesh(node_mesh, poses=poses)
+    #
+    #     return nodes_mesh
 
     def build_links_mesh(self, satellites: Satellites, links: list[tuple[SatID, SatID]], link_color: tuple[float, float, float]) -> Optional[pyrender.Mesh]:
         """
@@ -291,6 +337,7 @@ class ConstellationVisualizer(Visualizer):
         self.sats_node = None
         self.isls_node = None
 
+
     def update_simulation(self, t: float):
         self.constellation.update(t)
 
@@ -302,7 +349,7 @@ class ConstellationVisualizer(Visualizer):
                 angle_rotation = trimesh.transformations.quaternion_about_axis(angle, [1, 0, 0])
                 self.host_node.rotation = trimesh.transformations.quaternion_multiply(base_rotation, angle_rotation)
 
-        sats_mesh = self.build_nodes_mesh(self.sat_mesh, self.constellation.satellite_positions)
+        sats_mesh = self.build_nodes_mesh_from_sats(self.sat_mesh, self.constellation.satellites)
         if self.sats_node is not None:
             self.scene.remove_node(self.sats_node)
         self.sats_node = self.scene.add(sats_mesh)
@@ -313,6 +360,28 @@ class ConstellationVisualizer(Visualizer):
             self.isls_node = None
         if isl_mesh is not None:
             self.isls_node = self.scene.add(isl_mesh)
+    # def update_simulation(self, t: float):
+    #     self.constellation.update(t)
+    #
+    #     if self.host_rotation_period is not None:
+    #         # Set rotation quaternion
+    #         if self.host_node is not None:
+    #             angle = (2 * np.pi * t / self.host_rotation_period) + np.pi
+    #             base_rotation = trimesh.transformations.quaternion_about_axis(np.pi, [0, 1, 0])
+    #             angle_rotation = trimesh.transformations.quaternion_about_axis(angle, [1, 0, 0])
+    #             self.host_node.rotation = trimesh.transformations.quaternion_multiply(base_rotation, angle_rotation)
+    #
+    #     sats_mesh = self.build_nodes_mesh(self.sat_mesh, self.constellation.satellite_positions)
+    #     if self.sats_node is not None:
+    #         self.scene.remove_node(self.sats_node)
+    #     self.sats_node = self.scene.add(sats_mesh)
+    #
+    #     isl_mesh = self.build_links_mesh(self.constellation.satellites, self.constellation.isls, self.isl_color)
+    #     if self.isls_node is not None:
+    #         self.scene.remove_node(self.isls_node)
+    #         self.isls_node = None
+    #     if isl_mesh is not None:
+    #         self.isls_node = self.scene.add(isl_mesh)
 
 
 class MultiConstellationVisualizer(Visualizer):
@@ -364,7 +433,7 @@ class MultiConstellationVisualizer(Visualizer):
         self.isl_color = isl_color
         self.ill_color = ill_color
 
-        self.sat_mesh = trimesh.creation.icosphere(radius=0.1, subdivisions=1)
+        self.sat_mesh = trimesh.creation.icosphere(radius=0.05, subdivisions=1)
         self.sat_mesh.visual.vertex_colors = self.sat_color # type: ignore
 
         self.sats_node = None
@@ -438,3 +507,230 @@ class MultiConstellationVisualizer(Visualizer):
             self.ills_node = None
         if ill_mesh is not None:
             self.ills_node = self.scene.add(ill_mesh)
+
+class RoutingVisualizer(MultiConstellationVisualizer):
+    """
+    Visualizer that draws a source-routed path on top of the Starlink constellation.
+    It highlights specific ground stations and visualizes the validity of the computed route
+    as the simulation progresses.
+    """
+
+    def __init__(
+        self,
+        constellation: MultiConstellation,
+        source_id: SatID,
+        dest_id: SatID,
+        provider,
+        show_links: bool = False, # Default to false to reduce clutter
+        **kwargs
+    ):
+        """
+        Initialize the RoutingVisualizer.
+
+        Parameters:
+            constellation: The MultiConstellation instance.
+            source_id: The SatID of the source ground station.
+            dest_id: The SatID of the destination ground station.
+            provider: The SourceRoutingDataProvider instance to compute paths from.
+            show_links: Whether to show all background ISLs (default False for clarity).
+            **kwargs: Additional arguments passed to MultiConstellationVisualizer.
+        """
+        super().__init__(constellation, show_links=show_links, **kwargs)
+        
+        self.source_id = source_id
+        self.dest_id = dest_id
+        self.provider = provider
+        
+        self.path_node: Optional[pyrender.Node] = None
+        
+        # Colors
+        self.col_path_valid = (1.0, 1.0, 1.0, 1.0) # Cyan
+        self.col_path_broken = (1.0, 0.0, 0.0, 1.0) # Red
+        self.col_endpoints = (1.0, 1.0, 0.0, 1.0)  # Yellow
+        
+        # Create a mesh for the endpoints (larger spheres)
+        self.endpoint_mesh = trimesh.creation.icosphere(radius=0.2, subdivisions=2)
+        self.endpoint_mesh.visual.vertex_colors = self.col_endpoints
+        self.endpoints_node: Optional[pyrender.Node] = None
+
+    def update_simulation(self, t: float):
+        # 1. Update the physical simulation (moves satellites)
+        super().update_simulation(t)
+        
+        # 2. Update the routing provider (triggering graph updates if interval passed)
+        self.provider.update(self.multiconstellation, t)
+        
+        # 3. Highlight Endpoints
+        self._update_endpoints_mesh()
+
+        # 4. Compute and Draw Path
+        self._update_path_mesh()
+
+    def _update_endpoints_mesh(self):
+        """Draws large spheres at the source and destination."""
+        if self.endpoints_node is not None:
+            self.scene.remove_node(self.endpoints_node)
+            
+        source_sat = self.multiconstellation.satellites.by_id(self.source_id)
+        dest_sat = self.multiconstellation.satellites.by_id(self.dest_id)
+        
+        positions = []
+        if source_sat:
+            positions.append((source_sat.position * self.space_scale) + (source_sat.orbital_center.position * self.interplanetary_scale))
+        if dest_sat:
+            positions.append((dest_sat.position * self.space_scale) + (dest_sat.orbital_center.position * self.interplanetary_scale))
+            
+        if positions:
+            poses = np.tile(np.eye(4), (len(positions), 1, 1))
+            poses[:, :3, 3] = positions
+            mesh = pyrender.Mesh.from_trimesh(self.endpoint_mesh, poses=poses)
+            self.endpoints_node = self.scene.add(mesh)
+
+    # ...existing code...
+    def _update_path_mesh(self):
+        """Computes the route and draws it, color-coding valid/broken segments."""
+        if self.path_node is not None:
+            self.scene.remove_node(self.path_node)
+            self.path_node = None
+
+        # Get the path from the provider (based on its internal "static" view)
+        # Accessing private _get_path as per user strategy
+        try:
+            path_ids = self.provider._get_path(self.source_id, self.dest_id)
+        except Exception:
+            path_ids = []
+
+        if not path_ids or len(path_ids) < 2:
+            return
+
+        # Prepare geometry for lines (using cylinders for thickness)
+        valid_meshes = []
+        broken_meshes = []
+        
+        # Radius of the path tube (satellites are radius=0.1)
+        path_radius = 0.02
+        
+        # Create a set of current active links for O(1) lookup
+        # self.multiconstellation.links contains tuples of (id1, id2)
+        active_links = set()
+        for u, v in self.multiconstellation.links:
+            active_links.add(tuple(sorted((u, v))))
+
+        path_broken = False
+        
+        for i in range(len(path_ids) - 1):
+            u_id = path_ids[i]
+            v_id = path_ids[i+1]
+            
+            u_sat = self.multiconstellation.satellites.by_id(u_id)
+            v_sat = self.multiconstellation.satellites.by_id(v_id)
+            
+            if u_sat is None or v_sat is None:
+                continue
+                
+            p1 = (u_sat.position * self.space_scale) + (u_sat.orbital_center.position * self.interplanetary_scale)
+            p2 = (v_sat.position * self.space_scale) + (v_sat.orbital_center.position * self.interplanetary_scale)
+            
+            # Check connectivity
+            link_key = tuple(sorted((u_id, v_id)))
+            is_connected = link_key in active_links
+            
+            # Create a cylinder segment
+            # sections=6 is low-poly but faster for many segments
+            segment_mesh = trimesh.creation.cylinder(radius=path_radius, segment=np.array([p1, p2]), sections=6)
+            
+            if is_connected and not path_broken:
+                segment_mesh.visual.face_colors = self.col_path_valid
+                valid_meshes.append(segment_mesh)
+            else:
+                # Once we hit a break, or if this specific link is broken
+                path_broken = True
+                segment_mesh.visual.face_colors = self.col_path_broken
+                broken_meshes.append(segment_mesh)
+
+        all_meshes = valid_meshes + broken_meshes
+        
+        if all_meshes:
+            # Combine all cylinders into one mesh for efficient rendering
+            combined_mesh = trimesh.util.concatenate(all_meshes)
+            # Create pyrender mesh
+            mesh = pyrender.Mesh.from_trimesh(combined_mesh, smooth=False)
+            self.path_node = self.scene.add(mesh)
+
+    # def _update_path_mesh(self):
+    #     """Computes the route and draws it, color-coding valid/broken segments."""
+    #     if self.path_node is not None:
+    #         self.scene.remove_node(self.path_node)
+    #         self.path_node = None
+    #
+    #     # Get the path from the provider (based on its internal "static" view)
+    #     # Accessing private _get_path as per user strategy
+    #     try:
+    #         path_ids = self.provider._get_path(self.source_id, self.dest_id)
+    #         print(self.provider.get_path_cost(self.source_id, self.dest_id))
+    #     except Exception:
+    #         path_ids = []
+    #
+    #     if not path_ids or len(path_ids) < 2:
+    #         return
+    #
+    #     # Prepare geometry for lines
+    #     # We assume the path is stopped at the first break for "as much as possible"
+    #     # Or we can draw the broken link in red. Let's draw valid in Cyan, Broken in Red.
+    #
+    #     valid_segments = []
+    #     broken_segments = []
+    #
+    #     # Create a set of current active links for O(1) lookup
+    #     # self.multiconstellation.links contains tuples of (id1, id2)
+    #     active_links = set()
+    #     for u, v in self.multiconstellation.links:
+    #         active_links.add(tuple(sorted((u, v))))
+    #
+    #     path_broken = False
+    #
+    #     for i in range(len(path_ids) - 1):
+    #         u_id = path_ids[i]
+    #         v_id = path_ids[i+1]
+    #
+    #         u_sat = self.multiconstellation.satellites.by_id(u_id)
+    #         v_sat = self.multiconstellation.satellites.by_id(v_id)
+    #
+    #         if u_sat is None or v_sat is None:
+    #             continue
+    #
+    #         p1 = (u_sat.position * self.space_scale) + (u_sat.orbital_center.position * self.interplanetary_scale)
+    #         p2 = (v_sat.position * self.space_scale) + (v_sat.orbital_center.position * self.interplanetary_scale)
+    #
+    #         # Check connectivity
+    #         link_key = tuple(sorted((u_id, v_id)))
+    #         is_connected = link_key in active_links
+    #
+    #         if is_connected and not path_broken:
+    #             valid_segments.append(p1)
+    #             valid_segments.append(p2)
+    #         else:
+    #             # Once we hit a break, or if this specific link is broken
+    #             path_broken = True
+    #             broken_segments.append(p1)
+    #             broken_segments.append(p2)
+    #
+    #     primitives = []
+    #
+    #     if valid_segments:
+    #         primitives.append(pyrender.Primitive(
+    #             positions=np.array(valid_segments),
+    #             color_0=self.col_path_valid,
+    #             mode=1 # LINES
+    #         ))
+    #
+    #     if broken_segments:
+    #          primitives.append(pyrender.Primitive(
+    #             positions=np.array(broken_segments),
+    #             color_0=self.col_path_broken,
+    #             mode=1 # LINES
+    #         ))
+    #
+    #     if primitives:
+    #         mesh = pyrender.Mesh(primitives=primitives)
+    #         self.path_node = self.scene.add(mesh)

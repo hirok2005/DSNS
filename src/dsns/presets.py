@@ -510,7 +510,7 @@ class StarlinkMultiConstellation(MultiConstellation):
 
         self.id_helper = IDHelper()
 
-        self.ground_constellation = ground_constellation(self.id_helper)
+        self.ground_constellation = ground_constellation(self.id_helper, aws=True)
         self.starlink_constellation = starlink_constellation(self.id_helper, **starlink_kwargs)
 
         self.ground_ill_helper = ground_ill_helper(self.ground_constellation, self.starlink_constellation, min_elevation=25.0)
